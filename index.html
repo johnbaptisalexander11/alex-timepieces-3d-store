@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alex Timepieces 3D Store</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* Layout idea: one fixed full-screen 3D canvas; the page scrolls over it and each screen moves the watches
+     (variant carousel, colour-flooded detail steps, big type, line-up). Dark single-theme by choice. */
+  @property --v { syntax: "<color>"; inherits: true; initial-value: #b07d1e; }
+  :root {
+    color-scheme: dark;
+    --bg: #09090c;
+    --floor: #8f9198;
+    --ink: #ffffff;
+    --muted: rgba(255, 255, 255, 0.72);
+    --line: rgba(255, 255, 255, 0.22);
+    --v: #b07d1e;                       /* colour of the selected variant */
+    --font-display: "Anton", "Arial Narrow", Impact, sans-serif;
+    --font-body: "Instrument Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+    transition: --v 0.6s ease;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } :root { transition: none; } }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.55; overflow-x: hidden; }
+  a { color: inherit; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 400; text-transform: uppercase; margin: 0; line-height: 0.95; text-wrap: balance; }
+
+  /* ---------- fixed layers ---------- */
+  .bg-floor, .bg-color { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+  .bg-floor { background: radial-gradient(ellipse 90% 70% at 50% 108%, var(--floor) 0%, #3a3b42 38%, var(--bg) 78%); }
+  .bg-color { opacity: 0; background: radial-gradient(circle at 66% 48%, var(--v) 0%, color-mix(in srgb, var(--v) 62%, #000) 55%, color-mix(in srgb, var(--v) 30%, #000) 100%); }
+  #gl { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+  #gl canvas { display: block; width: 100%; height: 100%; }
+
+  .topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 6; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; }
+  .logo { font-family: var(--font-display); font-size: 22px; letter-spacing: 0.08em; text-decoration: none; line-height: 1; }
+  .logo small { display: block; font-family: var(--font-body); font-size: 8px; letter-spacing: 0.2em; font-weight: 600; margin-top: 3px; }
+  .topbar nav { display: flex; align-items: center; gap: 20px; font-size: 13px; font-weight: 500; }
+  .topbar nav a { text-decoration: none; color: var(--muted); }
+  .topbar nav a:hover { color: #fff; }
+  .bag { border: 0; border-radius: 999px; background: #fff; color: #000; padding: 6px 14px; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .steps { position: fixed; right: 22px; top: 50%; transform: translateY(-50%); z-index: 6; display: flex; flex-direction: column; gap: 12px; opacity: 0; pointer-events: none; }
+  .steps a { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid #fff; display: block; }
+  .steps a[aria-current="true"] { background: #fff; }
+
+  .loader { position: fixed; inset: 0; z-index: 9; background: var(--bg); display: flex; flex-direction: column; gap: 14px; align-items: center; justify-content: center; text-align: center; padding: 32px; color: var(--muted); font-size: 14px; transition: opacity 0.5s; }
+  .loader.done { opacity: 0; pointer-events: none; }
+  .loader .bar { width: 180px; height: 3px; background: var(--line); overflow: hidden; }
+  .loader .bar i { display: block; height: 100%; width: 30%; background: #fff; animation: slide 1.1s ease-in-out infinite alternate; }
+  @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(330%); } }
+
+  /* ---------- sections ---------- */
+  main { touch-action: pan-y; }
+  section { position: relative; z-index: 3; min-height: 100vh; min-height: 100svh; }
+
+  /* hero: variant carousel */
+  .hero { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding: 0 16px 5vh; user-select: none; -webkit-user-select: none; }
+  .arrow { position: absolute; top: 47%; width: 46px; height: 46px; border-radius: 50%; border: 1.5px solid var(--line); background: rgba(0, 0, 0, 0.25); font-size: 18px; line-height: 1; display: grid; place-items: center; }
+  .arrow:hover { border-color: #fff; }
+  #prev { left: calc(50% - min(28vw, 250px) - 23px); }
+  #next { left: calc(50% + min(28vw, 250px) - 23px); }
+  .vlabel { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .vcount { font-size: 12px; letter-spacing: 0.2em; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .vname { font-size: clamp(38px, 6.2vw, 78px); transition: opacity 0.18s, transform 0.18s, filter 0.18s; text-shadow: 0 4px 24px rgba(0, 0, 0, 0.55); }
+  .vname.swap { opacity: 0; transform: translateY(14px) scale(0.96); filter: blur(6px); }
+  .glow { width: min(420px, 70vw); height: 4px; border-radius: 4px; background: linear-gradient(90deg, transparent, var(--v), #fff, var(--v), transparent); box-shadow: 0 0 28px 6px var(--v); }
+  .explore { margin-top: 8px; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; text-decoration: none; border: 1.5px solid var(--line); border-radius: 999px; padding: 9px 18px; background: rgba(0, 0, 0, 0.3); }
+  .explore:hover { border-color: #fff; }
+
+  /* detail panels */
+  .panel { display: flex; align-items: center; padding: 90px 8vw; }
+  .copy { max-width: 390px; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; background: #fff; color: #000; padding: 3px 9px; margin-bottom: 14px; font-variant-numeric: tabular-nums; }
+  .copy h2 { font-size: clamp(44px, 6vw, 84px); margin-bottom: 16px; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.25); }
+  .copy p { margin: 0 0 18px; font-weight: 500; text-shadow: 0 1px 10px rgba(0, 0, 0, 0.35); }
+  .price { font-family: var(--font-display); font-size: 30px; font-variant-numeric: tabular-nums; margin-bottom: 14px; }
+  .price small { font-family: var(--font-body); font-size: 12px; font-weight: 500; margin-left: 8px; opacity: 0.8; }
+  .swatches { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+  .swatch { width: 34px; height: 34px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.55); padding: 0; background: linear-gradient(135deg, var(--a) 0 50%, var(--b) 50% 100%); position: relative; }
+  .swatch[aria-pressed="true"]::after { content: ""; position: absolute; inset: -7px; border-radius: 50%; border: 2px solid #fff; }
+  .cta { border: 0; border-radius: 999px; background: #fff; color: #000; font-weight: 600; padding: 13px 26px; }
+  .cta:hover { background: #e9e9e9; }
+  .status { font-size: 13px; min-height: 1.6em; margin: 12px 0 0 !important; }
+  .dragnote { font-size: 13px; opacity: 0.85; }
+
+  /* big type: sits behind the canvas so the watch overlaps the letters */
+  .bigtype { z-index: 1; display: grid; place-items: center; overflow: hidden; }
+  .bigtype h2 { font-size: clamp(110px, 27vw, 420px); line-height: 0.82; text-align: center; color: rgba(255, 255, 255, 0.92); }
+
+  .lineup { display: flex; flex-direction: column; align-items: center; justify-content: space-between; text-align: center; padding: 96px 20px 7vh; }
+  .lineup h2 { font-size: clamp(40px, 6vw, 80px); }
+  .lineup p { margin: 10px 0 0; color: var(--muted); }
+
+  .faq { background: var(--bg); min-height: 0; padding: 90px 8vw 40px; }
+  .faq h2 { font-size: clamp(54px, 9vw, 130px); margin-bottom: 36px; }
+  .faq details { border-top: 1px solid var(--line); padding: 18px 0; max-width: 820px; }
+  .faq summary { font-weight: 600; font-size: 18px; cursor: pointer; }
+  .faq details p { margin: 10px 0 0; color: var(--muted); max-width: 65ch; }
+  footer { position: relative; z-index: 3; background: var(--bg); padding: 28px 8vw 56px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); }
+  footer p { margin: 0 0 8px; max-width: 80ch; }
+
+  @media (max-width: 760px) {
+    .topbar { padding: 14px 16px; }
+    .topbar nav a { display: none; }
+    .panel { align-items: flex-end; padding: 0 20px 9vh; }
+    .copy h2 { margin-bottom: 10px; }
+    #prev { left: 12px; } #next { left: auto; right: 12px; }
+    .steps { right: 12px; }
+    .bg-color { background: radial-gradient(circle at 50% 34%, var(--v) 0%, color-mix(in srgb, var(--v) 58%, #000) 60%, color-mix(in srgb, var(--v) 26%, #000) 100%); }
+  }
+</style>
+</head>
+<body>
+
+<div class="bg-floor"></div>
+<div class="bg-color" id="bg-color"></div>
+<div id="gl" aria-hidden="true"></div>
+
+<header class="topbar">
+  <a class="logo" href="#top">ALEX<small>TIMEPIECES</small></a>
+  <nav aria-label="Sections">
+    <a href="#top">Colours</a>
+    <a href="#details">Details</a>
+    <a href="#lineup">Line-up</a>
+    <a href="#faq">Questions</a>
+    <button type="button" class="bag" id="bag" aria-label="Bag">Bag 0</button>
+  </nav>
+</header>
+
+<div class="steps" id="steps" aria-label="Detail steps">
+  <a href="#details" aria-label="Overview"></a>
+  <a href="#strap" aria-label="Strap"></a>
+  <a href="#pushers" aria-label="Pushers"></a>
+  <a href="#caseback" aria-label="Caseback"></a>
+</div>
+
+<div class="loader" id="loader">
+  <span id="loader-text">Loading 3D watches…</span>
+  <div class="bar" id="loader-bar"><i></i></div>
+</div>
+
+<main>
+  <section class="hero" id="top" aria-label="Choose a colourway">
+    <button type="button" class="arrow" id="prev" aria-label="Previous colourway">←</button>
+    <button type="button" class="arrow" id="next" aria-label="Next colourway">→</button>
+    <div class="vlabel">
+      <span class="vcount" id="vcount">01 / 06</span>
+      <h1 class="vname" id="vname">Midnight<br>Gold</h1>
+      <div class="glow"></div>
+      <a class="explore" href="#details">Explore this watch ↓</a>
+    </div>
+  </section>
+
+  <section class="panel" id="details">
+    <div class="copy">
+      <span class="tag">Chrono 44</span>
+      <h2 id="d-name">Midnight Gold</h2>
+      <p id="d-text"></p>
+      <div class="swatches" id="swatches" role="group" aria-label="Colourway"></div>
+      <div class="price"><span id="price"></span><small>sample price</small></div>
+      <button type="button" class="cta" id="add">Add to bag</button>
+      <p class="status" id="status" role="status"></p>
+    </div>
+  </section>
+
+  <section class="panel" id="strap">
+    <div class="copy">
+      <span class="tag">01 Strap</span>
+      <h2>Carbon fibre</h2>
+      <p>Woven carbon inlays run the length of the strap, framed by a moulded resin band that shrugs off sweat and salt water.</p>
+      <p class="dragnote">Drag sideways to spin the watch.</p>
+    </div>
+  </section>
+
+  <section class="panel" id="pushers">
+    <div class="copy">
+      <span class="tag">02 Case</span>
+      <h2>Three pushers</h2>
+      <p>Start, stop and reset sit proud of the bezel, so you can find them by touch, even with gloves on.</p>
+    </div>
+  </section>
+
+  <section class="panel" id="caseback">
+    <div class="copy">
+      <span class="tag">03 Caseback</span>
+      <h2>Sealed steel</h2>
+      <p>A screw-down steel caseback and a signed clasp finish the watch on the wrist side. Rated to 10 ATM.</p>
+    </div>
+  </section>
+
+  <section class="bigtype" id="tough" aria-label="Built tough">
+    <h2>Built<br>Tough</h2>
+  </section>
+
+  <section class="lineup" id="lineup">
+    <div>
+      <h2>Six colourways</h2>
+      <p>One case, one strap, six characters.</p>
+    </div>
+    <a class="explore" href="#top">Pick yours ↑</a>
+  </section>
+
+  <section class="faq" id="faq">
+    <h2>Questions</h2>
+    <details open>
+      <summary>Is this a real shop?</summary>
+      <p>No. Alex Timepieces is a practice brand for practising 3D e-commerce pages. Prices and specifications are examples and nothing is for sale.</p>
+    </details>
+    <details>
+      <summary>How do I change the colour?</summary>
+      <p>Use the arrows on the first screen, swipe left or right there, or tap a colour dot on the overview screen.</p>
+    </details>
+    <details>
+      <summary>Can I rotate the watch?</summary>
+      <p>Yes. On the detail screens, drag sideways anywhere to spin it. Scrolling also turns it to show the strap, the pushers and the caseback.</p>
+    </details>
+    <details>
+      <summary>How are the colours made?</summary>
+      <p>All six watches are the same 3D model. The page recolours the bezel, strap, pushers and hands in code, so adding a colourway is a few lines.</p>
+    </details>
+  </section>
+</main>
+
+<footer id="credits">
+  <p>3D model: "Chronograph Watch" by Eric Chadwick, © 2025 Darmstadt Graphics Group GmbH, from the Khronos glTF Sample Assets, licensed CC BY 4.0. It is based on "Chronograph Watch Mudmaster" by graphiccompressor, also CC BY 4.0. Colours are changed here. The logos on the model belong to the Khronos Group and Darmstadt Graphics Group.</p>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/environments/RoomEnvironment.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var MODEL_URL = "models/chronograph-watch.glb";
+
+  /* ---------- colourways ----------
+     parts: [linear r,g,b], metalness, roughness. Matched to the model's materials by name prefix. */
+  var PARTS = { carbon: "Band Carbon Fiber", band: "Band Plastic", bezel: "Bezel Frame", pusherCap: "Button Plastic", pusher: "Button Metal", hands: "Hand Color" };
+  var STEEL = [0.762, 0.743, 0.787], BLACK = [0.03, 0.03, 0.03], GOLD = [1, 0.72, 0.315], DARK = [0.2, 0.2, 0.2];
+  var RED = [0.791, 0.074, 0.074], BLUE = [0.03, 0.16, 0.62], GREEN = [0.175, 0.33, 0.2], ORANGE = [0.85, 0.2, 0.01];
+  var VARIANTS = [
+    { id: "gold", name: ["Midnight", "Gold"], page: "#b07d1e", a: "#d9b25f", b: "#2b2b2b", price: 68000,
+      text: "Brushed gold over black resin. The loud one, for people who like their tool watch dressed up.",
+      parts: { carbon: [GOLD, 1, 0.4], band: [BLACK, 0, 0.3], bezel: [GOLD, 1, 0.3], pusherCap: [BLACK, 0, 0.3], pusher: [STEEL, 1, 0.3], hands: [GOLD, 1, 0.3] } },
+    { id: "red", name: ["Signal", "Red"], page: "#c4183a", a: "#e64d4d", b: "#efefef", price: 62500,
+      text: "A red bezel on a white strap with a deep red carbon weave. Easy to spot on a busy wrist.",
+      parts: { carbon: [[0.45, 0.075, 0.075], 1, 0.4], band: [[0.87, 0.87, 0.87], 0, 0.3], bezel: [RED, 0, 0.3], pusherCap: [[0.83, 0.83, 0.83], 0, 0.3], pusher: [[0.05, 0.05, 0.05], 0, 0.2], hands: [RED, 0, 0.3] } },
+    { id: "blue", name: ["Deep", "Ocean"], page: "#1f45d0", a: "#3f6fe0", b: "#2b2b2b", price: 62500,
+      text: "Ocean blue against matte black. Calm at the desk and at home in the water.",
+      parts: { carbon: [BLACK, 0, 0.4], band: [BLACK, 0, 0.3], bezel: [BLUE, 0, 0.3], pusherCap: [BLACK, 0, 0.3], pusher: [STEEL, 1, 0.3], hands: [BLUE, 0, 0.3] } },
+    { id: "green", name: ["Forest", "Green"], page: "#1d7a48", a: "#749c7c", b: "#2b2b2b", price: 62500,
+      text: "Muted green with gunmetal pushers. Made for trails, fine in town.",
+      parts: { carbon: [BLACK, 0, 0.4], band: [BLACK, 0, 0.3], bezel: [GREEN, 0, 0.3], pusherCap: [BLACK, 0, 0.3], pusher: [DARK, 1, 0.3], hands: [GREEN, 0, 0.3] } },
+    { id: "orange", name: ["Volt", "Orange"], page: "#df5a12", a: "#f08a3c", b: "#2b2b2b", price: 62500,
+      text: "High-visibility orange on the bezel, pushers and hands. Impossible to lose in a kit bag.",
+      parts: { carbon: [BLACK, 0, 0.4], band: [BLACK, 0, 0.3], bezel: [ORANGE, 0, 0.3], pusherCap: [ORANGE, 0, 0.3], pusher: [DARK, 1, 0.3], hands: [ORANGE, 0, 0.3] } },
+    { id: "white", name: ["Arctic", "White"], page: "#6d7684", a: "#f7f7f7", b: "#e11d1d", price: 62500,
+      text: "All white with red pushers and hands. Clean, bright and a little bit racing.",
+      parts: { carbon: [[0.87, 0.87, 0.87], 0, 0.4], band: [[1, 1, 1], 0, 0.3], bezel: [[1, 1, 1], 0, 0.3], pusherCap: [[0.86, 0, 0], 0, 0.3], pusher: [STEEL, 1, 0.3], hands: [[0.86, 0, 0], 0, 0.3] } }
+  ];
+  var N = VARIANTS.length;
+  var sel = 0;
+  var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var $ = function (id) { return document.getElementById(id); };
+
+  /* ---------- page UI ---------- */
+  var bagCount = 0;
+  VARIANTS.forEach(function (v, i) {
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "swatch"; b.id = "swatch-" + v.id;
+    b.style.setProperty("--a", v.a); b.style.setProperty("--b", v.b);
+    b.title = v.name.join(" "); b.setAttribute("aria-label", v.name.join(" "));
+    b.addEventListener("click", function () { select(i); });
+    $("swatches").appendChild(b);
+  });
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function paintUI() {
+    var v = VARIANTS[sel];
+    document.documentElement.style.setProperty("--v", v.page);
+    $("vcount").textContent = pad(sel + 1) + " / " + pad(N);
+    $("d-name").textContent = v.name.join(" ");
+    $("d-text").textContent = v.text;
+    $("price").textContent = "Rs " + v.price.toLocaleString("en-LK");
+    $("status").textContent = "";
+    VARIANTS.forEach(function (x, i) { $("swatch-" + x.id).setAttribute("aria-pressed", String(i === sel)); });
+  }
+  var swapTimer = null;
+  function select(i) {
+    i = ((i % N) + N) % N;
+    if (i === sel) return;
+    sel = i;
+    paintUI();
+    var name = $("vname");
+    name.classList.add("swap");
+    clearTimeout(swapTimer);
+    swapTimer = setTimeout(function () {
+      name.textContent = "";
+      name.appendChild(document.createTextNode(VARIANTS[sel].name[0]));
+      name.appendChild(document.createElement("br"));
+      name.appendChild(document.createTextNode(VARIANTS[sel].name[1]));
+      name.classList.remove("swap");
+    }, reduced ? 0 : 180);
+  }
+  paintUI();
+  $("prev").addEventListener("click", function () { select(sel - 1); });
+  $("next").addEventListener("click", function () { select(sel + 1); });
+  $("add").addEventListener("click", function () {
+    bagCount++;
+    $("bag").textContent = "Bag " + bagCount;
+    $("status").textContent = "Added " + VARIANTS[sel].name.join(" ") + ". Practice store, so no order is placed.";
+  });
+
+  /* ---------- scroll position, measured in "screens" ----------
+     p = 0 carousel, 1 overview, 2 strap, 3 pushers, 4 caseback, 5 big type, 6 line-up */
+  var keySections = ["top", "details", "strap", "pushers", "caseback", "tough", "lineup"].map($);
+  function scrollP() {
+    var y = window.scrollY || document.documentElement.scrollTop || 0;
+    for (var i = keySections.length - 1; i >= 0; i--) {
+      var top = keySections[i].offsetTop;
+      if (y >= top) {
+        if (i === keySections.length - 1) return i;
+        return i + (y - top) / Math.max(1, keySections[i + 1].offsetTop - top);
+      }
+    }
+    return 0;
+  }
+  function smooth(x, a, b) { x = Math.min(1, Math.max(0, (x - a) / (b - a))); return x * x * (3 - 2 * x); }
+
+  /* ---------- 3D ---------- */
+  var host = $("gl");
+  function fail(msg) { $("loader-bar").style.display = "none"; $("loader-text").textContent = msg; }
+  var renderer;
+  try {
+    if (!window.THREE || !THREE.GLTFLoader) throw new Error("libraries missing");
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  } catch (e) {
+    fail("The 3D view could not start. Check your connection, or try a current browser with WebGL turned on.");
+    return;
+  }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  host.appendChild(renderer.domElement);
+
+  var scene = new THREE.Scene();
+  scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new THREE.RoomEnvironment(), 0.04).texture;
+  var camera = new THREE.PerspectiveCamera(30, 1, 0.1, 200);
+  camera.position.set(0, 0, 24);
+  var narrow = false;
+
+  // Ring light floating above the selected watch on the first screen
+  var ring = new THREE.Group();
+  [1.55, 1.05].forEach(function (r, i) {
+    var m = new THREE.Mesh(new THREE.TorusGeometry(r, i ? 0.035 : 0.06, 10, 80),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, toneMapped: false }));
+    ring.add(m);
+  });
+  ring.rotation.x = 1.22;
+  scene.add(ring);
+
+  /* One entry per colourway: its own copy of the model with its own materials. */
+  var watches = [];
+  function buildWatches(gltf) {
+    VARIANTS.forEach(function (v, i) {
+      var model = gltf.scene.clone(true);
+      var mats = [], seen = {};
+      model.traverse(function (o) {
+        if (!o.isMesh) return;
+        var src = o.material;
+        if (!seen[src.uuid]) {
+          var m = src.clone();
+          if (m.name.indexOf("Glass") === 0) {
+            // Simple clear glass: cheaper than real-time refraction and reads well over the dial.
+            m.transmission = 0; m.transparent = true; m.opacity = 0.12; m.roughness = 0; m.metalness = 0; m.depthWrite = false;
+          }
+          Object.keys(PARTS).forEach(function (key) {
+            if (m.name.indexOf(PARTS[key]) === 0) {
+              var s = v.parts[key];
+              m.color.setRGB(s[0][0], s[0][1], s[0][2]); m.metalness = s[1]; m.roughness = s[2];
+            }
+          });
+          seen[src.uuid] = m;
+          mats.push({ m: m, base: m.color.clone() });
+        }
+        o.material = seen[src.uuid];
+        if (o.material.transparent) o.renderOrder = 2;
+      });
+      model.position.set(0, 0.05, 1.9);       // spin around the middle of the strap loop
+      var pivot = new THREE.Group();
+      pivot.rotation.order = "ZXY";            // spin first, then lean, then roll on screen
+      pivot.add(model);
+      pivot.scale.setScalar(0.0001);
+      scene.add(pivot);
+      var mixer = null;
+      if (gltf.animations.length && !reduced) {
+        mixer = new THREE.AnimationMixer(model);
+        mixer.clipAction(gltf.animations[0]).play();   // sweeping seconds hand
+      }
+      watches.push({ pivot: pivot, mats: mats, mixer: mixer, cur: null, lastD: 0, k: -1 });
+    });
+  }
+
+  /* ---------- poses ----------
+     Where watch i should be on each screen. d = how many places it sits from the selected one. */
+  var spread = reduced ? 1 : 0;   // intro: side watches fan out from the centre
+  var userSpin = 0;
+  function wrapD(i) { var d = i - sel; while (d >= N / 2) d -= N; while (d < -N / 2) d += N; return d; }
+  function heroPose(d, o) {
+    var ad = Math.abs(d), gap = narrow ? 3.4 : 4.7;
+    var vis = 1 - smooth(ad, 2.1, 2.7);
+    o.x = d * gap * spread; o.y = (narrow ? 1.0 : 1.55) - ad * 0.15; o.z = -ad * 1.7;
+    o.s = (narrow ? 0.72 : 0.84) * (ad < 0.5 ? 1 : 0.86 * spread) * vis;
+    o.rx = 0.12; o.ry = -0.45 + d * 0.12; o.rz = -0.3; o.k = ad < 0.5 ? 1 : 0.08;
+  }
+  var DETAIL = [   // selected watch on the four detail screens: x, y, z, scale, rx, ry, rz (desktop / phone)
+    { w: [4.7, -0.5, 4, 1.9, 0.2, -0.6, -0.35],  n: [0, 2.7, 0, 1.0, 0.2, -0.6, -0.3] },
+    { w: [4.3, -0.2, 2, 1.55, 1.05, -0.75, -0.2], n: [0, 2.2, 0, 0.95, 1.0, -0.75, -0.15] },
+    { w: [4.6, 0, 2, 1.5, 0.1, -1.4, -0.1],      n: [0, 2.3, 0, 1.0, 0.1, -1.4, -0.08] },
+    { w: [4.2, 0, 2, 1.55, 0.15, -3.5, 0.15],     n: [0, 2.3, 0, 0.95, 0.15, -3.5, 0.1] }
+  ];
+  function pose(key, i, d, o) {
+    var isSel = i === sel;
+    if (key === 0) { heroPose(d, o); return; }
+    if (key === 6) {                                   // line-up: everyone in colour, in a row
+      var c = i - (N - 1) / 2;
+      o.x = c * (narrow ? 0.98 : 3.05); o.y = narrow ? 0.4 - c * 0.45 : 0.1 - c * 0.14; o.z = narrow ? c * 0.9 : 0;
+      o.s = narrow ? 0.46 : 0.62; o.rx = 0.12; o.ry = (isSel ? -2 * Math.PI : 0) - 0.5; o.rz = -0.3; o.k = 1;
+      return;
+    }
+    if (!isSel) {                                      // other colours wait off-screen
+      heroPose(d, o);
+      o.x = (d < 0 ? -1 : 1) * (narrow ? 9 : 17); o.z = -4; o.s = 0.4; o.k = 0.08;
+      return;
+    }
+    if (key === 5) {                                   // big type: centred in front of the letters
+      o.x = 0; o.y = -0.1; o.z = 2; o.s = narrow ? 0.95 : 1.45; o.rx = 0.1; o.ry = -2 * Math.PI - 0.35; o.rz = -0.22; o.k = 1;
+      return;
+    }
+    var p = DETAIL[key - 1][narrow ? "n" : "w"];
+    o.x = p[0] * (narrow ? 1 : Math.min(1.25, Math.max(0.7, camera.aspect / 1.67))); o.y = p[1]; o.z = p[2]; o.s = p[3]; o.rx = p[4]; o.ry = p[5]; o.rz = p[6]; o.k = 1;
+  }
+  var A = {}, B = {}, FIELDS = ["x", "y", "z", "s", "rx", "ry", "rz", "k"];
+
+  /* ---------- input: swipe on the first screen, drag-to-spin after it ---------- */
+  var drag = null;
+  window.addEventListener("pointerdown", function (e) {
+    if (e.target.closest("a, button, summary, .faq, footer")) return;
+    drag = { x: e.clientX, y: e.clientY, last: e.clientX, hero: scrollP() < 0.5 };
+  });
+  window.addEventListener("pointermove", function (e) {
+    if (!drag || drag.hero) return;
+    userSpin += (e.clientX - drag.last) * 0.009;
+    drag.last = e.clientX;
+  });
+  function endDrag(e) {
+    if (drag && drag.hero) {
+      var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) select(sel + (dx < 0 ? 1 : -1));
+    }
+    drag = null;
+  }
+  window.addEventListener("pointerup", endDrag);
+  window.addEventListener("pointercancel", function () { drag = null; });
+  window.addEventListener("keydown", function (e) {
+    if (scrollP() > 0.5) return;
+    if (e.key === "ArrowLeft") select(sel - 1);
+    if (e.key === "ArrowRight") select(sel + 1);
+  });
+
+  /* ---------- sizing ---------- */
+  function resize() {
+    var w = host.clientWidth, h = host.clientHeight;
+    if (!w || !h) return;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    narrow = w / h < 0.9;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  /* ---------- frame loop ---------- */
+  var clock = new THREE.Clock();
+  var stepLinks = Array.prototype.slice.call(document.querySelectorAll("#steps a"));
+  function frame() {
+    requestAnimationFrame(frame);
+    var dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+    var ease = reduced ? 1 : 1 - Math.pow(0.0012, dt);     // frame-rate independent smoothing
+    var p = scrollP();
+    var k0 = Math.min(5, Math.floor(p)), f = smooth(p - k0, 0, 1);
+    if (watches.length && spread < 1) spread = Math.min(1, spread + dt * 0.9);
+
+    // page layers that follow the scroll
+    $("bg-color").style.opacity = (smooth(p, 0.3, 0.95) * (1 - smooth(p, 5.15, 5.9))).toFixed(3);
+    var inDetail = smooth(p, 0.6, 1) * (1 - smooth(p, 4.3, 4.7));
+    $("steps").style.opacity = inDetail.toFixed(3);
+    $("steps").style.pointerEvents = inDetail > 0.5 ? "auto" : "none";
+    var step = Math.min(3, Math.max(0, Math.round(p) - 1));
+    stepLinks.forEach(function (a, i) { a.setAttribute("aria-current", String(i === step)); });
+    var ringShow = (1 - smooth(p, 0, 0.5)) * spread;
+    ring.position.set(0, narrow ? 4.6 : 5.15, 0);
+    ring.children.forEach(function (m) { m.material.opacity = ringShow * 0.9; });
+    ring.visible = ringShow > 0.01;
+
+    var spinMix = smooth(p, 0.5, 1) * (1 - smooth(p, 5.2, 6));
+    watches.forEach(function (w, i) {
+      var d = wrapD(i);
+      pose(k0, i, d, A); pose(k0 + 1, i, d, B);
+      if (!w.cur) { w.cur = {}; FIELDS.forEach(function (key) { w.cur[key] = A[key]; }); w.cur.s = 0; w.lastD = d; }
+      if (Math.abs(d - w.lastD) > 2.5) {                 // jumped round the back of the carousel: re-enter from the new side
+        w.cur.x = (d < 0 ? -1 : 1) * 3.2 * (narrow ? 3.4 : 4.7); w.cur.s = 0;
+      }
+      w.lastD = d;
+      FIELDS.forEach(function (key) {
+        var target = A[key] + (B[key] - A[key]) * f;
+        w.cur[key] += (target - w.cur[key]) * ease;
+      });
+      var c = w.cur, isSel = i === sel;
+      var bob = isSel && !reduced ? Math.sin(t * 1.2) * 0.08 : 0;
+      var sway = isSel && !reduced ? Math.sin(t * 0.7) * 0.06 : 0;
+      w.pivot.position.set(c.x, c.y + bob, c.z);
+      w.pivot.rotation.set(c.rx, c.ry + sway + userSpin * spinMix, c.rz);
+      w.pivot.scale.setScalar(Math.max(0.0001, c.s));
+      w.pivot.visible = c.s > 0.01;
+      if (Math.abs(c.k - w.k) > 0.002) {                 // colour amount: 1 = full colour, near 0 = dark silhouette
+        w.k = c.k;
+        w.mats.forEach(function (e) { e.m.color.copy(e.base).multiplyScalar(c.k); e.m.envMapIntensity = 0.22 + 0.78 * c.k; });
+      }
+      if (w.mixer) w.mixer.update(dt);
+    });
+    renderer.render(scene, camera);
+  }
+
+  /* ---------- load the model ---------- */
+  function onLoaded(gltf) {
+    buildWatches(gltf);
+    $("loader").classList.add("done");
+  }
+  function onError() { fail("The 3D watch model could not be loaded. Reload the page to try again."); }
+  var loader = new THREE.GLTFLoader();
+  frame();
+  // Let the loading screen paint before the heavy decode starts.
+  setTimeout(function () {
+    if (window.WATCH_GLB_BASE64) {
+      // Model shipped inside a script file (base64). Decode it to bytes and parse.
+      try {
+        var bin = atob(window.WATCH_GLB_BASE64);
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        window.WATCH_GLB_BASE64 = null;
+        loader.parse(bytes.buffer, "", onLoaded, onError);
+      } catch (e) { onError(); }
+    } else {
+      // Normal hosting (Vercel, Netlify, your own server): load the .glb file directly.
+      loader.load(MODEL_URL, onLoaded, undefined, onError);
+    }
+  }, 30);
+})();
+</script>
+</body>
+</html>
